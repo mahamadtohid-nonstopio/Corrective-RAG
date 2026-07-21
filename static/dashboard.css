@@ -1,0 +1,119 @@
+/* Telemetry dashboard — matches the Clinical Reference token system. */
+
+.last-updated {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--muted);
+    letter-spacing: 0.02em;
+}
+
+.dash {
+    max-width: 1400px;
+    margin: 0 auto;
+    padding: 40px 40px 80px;
+}
+
+.dash-totals {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: 0;
+    margin-bottom: 32px;
+    border-top: var(--hair);
+    border-bottom: var(--hair);
+}
+.dash-totals .tot { border-right: var(--hair); border-bottom: none; }
+.dash-totals .tot:last-child { border-right: none; }
+
+.grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 24px;
+    margin-bottom: 24px;
+}
+.grid .wide { grid-column: 1 / -1; }
+@media (max-width: 960px) {
+    .grid { grid-template-columns: 1fr; }
+    .grid .wide { grid-column: auto; }
+}
+
+.card {
+    background: var(--card);
+    border: var(--hair-strong);
+    border-radius: 0;
+    padding: 24px 28px;
+    box-shadow: none;
+}
+.card h2 {
+    margin: 0 0 20px 0;
+    font-family: var(--sans);
+    font-size: 10.5px;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: 0.22em;
+    font-weight: 600;
+    padding-bottom: 12px;
+    border-bottom: var(--hair);
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+}
+.card h2::before {
+    content: "";
+    display: inline-block;
+    width: 18px;
+    height: 1px;
+    background: var(--muted);
+}
+.card canvas { max-height: 300px; }
+
+.table-wrap { overflow-x: auto; }
+table#requests {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13px;
+    font-family: var(--sans);
+}
+table#requests thead th {
+    text-align: left;
+    padding: 12px 10px;
+    border-bottom: var(--hair-strong);
+    color: var(--muted);
+    font-size: 10.5px;
+    text-transform: uppercase;
+    letter-spacing: 0.16em;
+    font-weight: 600;
+    background: transparent;
+    position: sticky;
+    top: 0;
+    font-family: var(--sans);
+}
+table#requests tbody td {
+    padding: 12px 10px;
+    border-bottom: var(--hair);
+    vertical-align: top;
+    color: var(--ink);
+}
+table#requests tbody tr:hover td { background: var(--page); }
+table#requests .nodes {
+    font-family: var(--mono);
+    color: var(--ink-soft);
+    font-size: 11.5px;
+    letter-spacing: 0.02em;
+}
+table#requests .status-ok { color: var(--verify); font-weight: 600; font-family: var(--mono); font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase; }
+table#requests .status-err { color: var(--marker); font-weight: 600; font-family: var(--mono); font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase; }
+table#requests .q {
+    max-width: 340px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-family: var(--serif);
+    font-size: 14px;
+}
+
+@media (max-width: 720px) {
+    .dash { padding: 28px 22px 60px; }
+    .dash-totals { grid-template-columns: 1fr 1fr; }
+    .dash-totals .tot { border-right: none; border-bottom: var(--hair); }
+    .card { padding: 20px 22px; }
+}

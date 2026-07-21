@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>HKN · Telemetry</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link rel="stylesheet"
+        href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,300..600;1,9..144,300..500&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap" />
+    <link rel="stylesheet" href="/static/styles.css" />
+    <link rel="stylesheet" href="/static/dashboard.css" />
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+</head>
+<body>
+    <header class="topbar">
+        <div class="brand">
+            <span class="logo">Hkn</span>
+            <div>
+                <h1>Telemetry <em>Log</em></h1>
+                <p>Live LLM-call metrics</p>
+            </div>
+        </div>
+        <div class="topbar-links">
+            <a href="/">Back to app</a>
+            <span id="last-updated" class="last-updated">refreshing…</span>
+        </div>
+    </header>
+
+    <main class="dash">
+        <section id="totals" class="totals dash-totals"></section>
+
+        <div class="grid">
+            <article class="card">
+                <h2>Calls per request</h2>
+                <canvas id="chart-timeline"></canvas>
+            </article>
+
+            <article class="card">
+                <h2>Pipeline share</h2>
+                <canvas id="chart-share"></canvas>
+            </article>
+
+            <article class="card wide">
+                <h2>Average calls per pipeline</h2>
+                <canvas id="chart-avg"></canvas>
+            </article>
+        </div>
+
+        <article class="card">
+            <h2>Recent requests</h2>
+            <div class="table-wrap">
+                <table id="requests">
+                    <thead>
+                        <tr>
+                            <th>#</th>
+                            <th>Mode</th>
+                            <th>Question</th>
+                            <th>Nodes visited</th>
+                            <th>LLM calls</th>
+                            <th>Duration</th>
+                            <th>Timestamp</th>
+                            <th>Status</th>
+                        </tr>
+                    </thead>
+                    <tbody></tbody>
+                </table>
+            </div>
+        </article>
+    </main>
+
+    <script src="/static/dashboard.js"></script>
+</body>
+</html>

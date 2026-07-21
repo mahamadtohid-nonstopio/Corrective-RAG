@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Healthcare Knowledge Navigator</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link rel="stylesheet"
+        href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,300..600;1,9..144,300..500&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap" />
+    <link rel="stylesheet" href="/static/styles.css" />
+    <link rel="stylesheet" href="/static/dashboard.css" />
+</head>
+<body>
+    <header class="topbar">
+        <div class="brand">
+            <span class="logo">Hkn</span>
+            <div>
+                <h1>Healthcare Knowledge <em>Navigator</em></h1>
+                <p>Evidence-cited clinical answers</p>
+            </div>
+        </div>
+        <div class="topbar-links">
+            <a href="/dashboard">Telemetry</a>
+            <div id="health" class="health pending">checking…</div>
+        </div>
+    </header>
+
+    <main>
+        <section class="ask-card">
+            <label for="question">Ask a clinical question</label>
+            <textarea id="question" rows="4"
+                placeholder="e.g. First-line pharmacological therapy for a newly diagnosed adult with type 2 diabetes and CKD stage 3."></textarea>
+
+            <div class="controls">
+                <fieldset class="modes">
+                    <legend>Pipeline</legend>
+                    <label><input type="radio" name="mode" value="compare" checked /> Compare</label>
+                    <label><input type="radio" name="mode" value="rag" /> RAG only</label>
+                    <label><input type="radio" name="mode" value="crag" /> CRAG only</label>
+                </fieldset>
+                <button id="ask" type="button">Ask</button>
+            </div>
+
+            <p class="disclaimer" id="disclaimer"></p>
+        </section>
+
+        <section id="results" class="results"></section>
+
+        <section class="traces-card">
+            <div class="traces-head">
+                <h2>Call log</h2>
+                <div class="traces-actions">
+                    <button id="refresh-traces" type="button">Refresh</button>
+                    <button id="reset-traces" type="button" class="secondary">Reset</button>
+                </div>
+            </div>
+            <div id="traces-totals" class="totals"></div>
+            <ol id="traces-history" class="traces-history"></ol>
+        </section>
+    </main>
+
+    <template id="result-template">
+        <article class="result">
+            <header>
+                <h2 class="title"></h2>
+                <div class="confidence">
+                    <span class="conf-label">–</span>
+                    <div class="bar"><div class="fill"></div></div>
+                    <span class="conf-value">–</span>
+                </div>
+            </header>
+            <div class="answer"></div>
+            <details class="citations">
+                <summary>Sources cited</summary>
+                <ol class="citation-list"></ol>
+            </details>
+            <details class="trace">
+                <summary>Reasoning trace</summary>
+                <ol class="trace-list"></ol>
+            </details>
+        </article>
+    </template>
+
+    <script src="/static/app.js"></script>
+</body>
+</html>
