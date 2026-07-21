@@ -5,6 +5,7 @@ import re
 from typing import Iterable
 
 from langchain_core.documents import Document
+from langchain_core.prompts import ChatPromptTemplate
 from langchain_openai import ChatOpenAI
 
 from .config import Settings
@@ -14,6 +15,58 @@ MEDICAL_DISCLAIMER = (
     "Educational reference only. Not a substitute for professional clinical "
     "judgement. Verify against primary sources before making patient-care decisions."
 )
+
+OFF_TOPIC_REFUSAL = (
+    "This question is outside the scope of the Healthcare Knowledge Navigator, "
+    "which answers evidence-cited clinical questions from indexed medical sources. "
+    "Please rephrase as a question about diagnosis, treatment, pharmacology, "
+    "clinical guidelines, or another medical topic."
+)
+
+TOPIC_GATE_PROMPT = ChatPromptTemplate.from_messages(
+    [
+        (
+            "system",
+            "You gate incoming questions for a clinical knowledge assistant that "
+            "answers only healthcare/medical questions. Classify each question.\n"
+            "Reply 'yes' if it concerns medicine, clinical practice, pharmacology, "
+            "diagnosis, treatment, patient care, disease, epidemiology, medical "
+            "guidelines, public health, medical devices, or human biology relevant "
+            "to health.\n"
+            "Reply 'no' for anything else — sports, celebrities, general trivia, "
+            "programming, finance, cooking, entertainment, etc.\n"
+            "Reply with the single token 'yes' or 'no'. Nothing else.",
+        ),
+        ("human", "Question:\n{question}"),
+    ]
+)
+
+
+def is_healthcare_question(llm, question: str) -> bool:
+    """Lightweight LLM classifier — one call, one token in / one token out.
+
+    Fails open (returns True) on classifier errors so infrastructure issues
+    do not silently block legitimate clinical queries.
+    """
+    chain = TOPIC_GATE_PROMPT | llm
+    try:
+        response = chain.invoke({"question": question})
+        text = (response.content or "").strip().lower()
+    except Exception:  # noqa: BLE001 — fail-open on infra hiccups
+        return True
+    return text.startswith("y")
+
+
+def off_topic_response(question: str) -> dict:
+    """Canonical refusal envelope emitted when the topic gate blocks a query."""
+    return {
+        "question": question,
+        "answer": OFF_TOPIC_REFUSAL,
+        "citations": [],
+        "confidence": 0.0,
+        "confidence_label": "OUT OF SCOPE",
+        "trace": ["topic gate: off-topic → refused before retrieval"],
+    }
 
 
 def build_chat_llm(settings: Settings, temperature: float = 0.1) -> ChatOpenAI:

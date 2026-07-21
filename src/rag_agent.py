@@ -19,7 +19,9 @@ from .utils import (
     build_chat_llm,
     format_citations,
     format_context,
+    is_healthcare_question,
     label_confidence,
+    off_topic_response,
     parse_confidence,
 )
 from .vector_store import load_vector_store
@@ -145,6 +147,11 @@ class RAGPipeline:
 
     def ask(self, question: str) -> dict:
         logger.info("\n[RAG] ▶ starting: %r", question[:80])
+        if not is_healthcare_question(self.grader, question):
+            logger.info("[RAG]     topic gate: OFF-TOPIC → refused")
+            TELEMETRY.record_node("topic_gate")
+            return off_topic_response(question)
+        TELEMETRY.record_node("topic_gate")
         final: dict = {"question": question}
         prev = "START"
         for step in self.graph.stream({"question": question}, stream_mode="updates"):
