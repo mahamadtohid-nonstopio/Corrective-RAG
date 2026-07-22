@@ -1,15 +1,23 @@
 """Corrective RAG (CRAG) agent implemented as a LangGraph.
 
-Pipeline (Yan et al., 2024, "Corrective Retrieval Augmented Generation"):
+Pipeline (Yan et al., 2024, "Corrective Retrieval Augmented Generation"), with
+two cost optimisations:
 
-    retrieve → grade each doc → decide action
+    retrieve (with cosine scores) → topic gate
+        - top score < TOPIC_SCORE_THRESHOLD → refuse (no LLM calls)
+    → grade each doc → decide action
         - all relevant       → generate
-        - partially relevant → rewrite query + web search → merge → generate
-        - all irrelevant     → rewrite query + web search only → generate
-    → score_confidence → END
+        - partially relevant → rewrite → web search → merge → generate
+        - all irrelevant     → rewrite → web search only → generate
+    → END
 
-Web search fallback uses Tavily if TAVILY_API_KEY is set; otherwise we degrade
-gracefully and mark low confidence.
+The generator uses structured output and returns (answer, confidence) in a
+single LLM call — the separate audit call is folded away.
+
+Cost per query:
+    - happy path      : 2 LLM calls (grade + answer/confidence)
+    - correction path : 3 LLM calls (grade + rewrite + answer/confidence)
+    - off-topic       : 0 LLM calls (refused from retrieval score alone)
 """
 from __future__ import annotations
 
@@ -25,13 +33,11 @@ from .config import Settings, get_settings
 from .telemetry import TELEMETRY
 from .utils import (
     MEDICAL_DISCLAIMER,
+    OFF_TOPIC_REFUSAL,
     build_chat_llm,
     format_citations,
     format_context,
-    is_healthcare_question,
     label_confidence,
-    off_topic_response,
-    parse_confidence,
 )
 from .vector_store import load_vector_store
 
@@ -55,18 +61,39 @@ class GradeBatch(BaseModel):
     )
 
 
+class AnsweredResponse(BaseModel):
+    """Structured output for the answer LLM — returns answer + confidence together."""
+
+    answer: str = Field(
+        description=(
+            "Evidence-based answer with inline bracket citations like [1], [2] "
+            "referring to the numbered context passages. End with the disclaimer."
+        )
+    )
+    confidence: float = Field(
+        ge=0.0,
+        le=1.0,
+        description=(
+            "Self-assessment 0-1 for how well the context supports the answer. "
+            "1.0 = every claim directly supported; 0.0 = unsupported."
+        ),
+    )
+
+
 class CRAGState(TypedDict, total=False):
     question: str
     original_question: str
     documents: list[Document]
     web_documents: list[Document]
+    top_score: float
+    off_topic: bool
     grades: list[str]
-    action: Literal["generate", "supplement", "web_only"]
+    action: Literal["generate", "supplement", "web_only", "refuse"]
     answer: str
     citations: list[dict]
     confidence: float
     confidence_label: str
-    trace: list[str]  # human-readable log of graph decisions
+    trace: list[str]
 
 
 GRADE_PROMPT = ChatPromptTemplate.from_messages(
@@ -105,34 +132,21 @@ ANSWER_PROMPT = ChatPromptTemplate.from_messages(
             "system",
             "You are a Healthcare Knowledge Navigator assisting clinicians. "
             "Answer strictly from the provided context.\n"
-            "Rules:\n"
+            "Rules for the 'answer' field:\n"
             "- Cite each claim inline with bracketed markers [1], [2] matching the "
             "numbered passages.\n"
-            "- If some context comes from web sources, note this and flag lower "
-            "confidence.\n"
+            "- If some context comes from web sources, note this and lower confidence.\n"
             "- If context is insufficient, say so explicitly.\n"
             "- Frame guidance as evidence summaries, not direct patient-care orders.\n"
-            f"- Always end with the disclaimer: '{MEDICAL_DISCLAIMER}'",
+            f"- End the answer with the disclaimer: '{MEDICAL_DISCLAIMER}'\n"
+            "Rules for the 'confidence' field:\n"
+            "- Score 0.0-1.0 for how directly the context supports every claim.\n"
+            "- Be strict: partial support ≈ 0.5, unsupported claims lower.",
         ),
         (
             "human",
             "Clinical question:\n{question}\n\nContext passages:\n{context}\n\n"
-            "Write the evidence-based answer with inline citations.",
-        ),
-    ]
-)
-
-CONFIDENCE_PROMPT = ChatPromptTemplate.from_messages(
-    [
-        (
-            "system",
-            "You audit medical answers. Return ONLY a number between 0 and 1 "
-            "indicating how well the answer is grounded in the provided context.",
-        ),
-        (
-            "human",
-            "Question:\n{question}\n\nContext:\n{context}\n\nAnswer:\n{answer}\n\n"
-            "Confidence score (0-1):",
+            "Return the answer and confidence.",
         ),
     ]
 )
@@ -140,13 +154,11 @@ CONFIDENCE_PROMPT = ChatPromptTemplate.from_messages(
 
 class CRAGPipeline:
     RELEVANCE_THRESHOLD = 0.5  # fraction of relevant docs to skip correction
+    WEB_ONLY_CONF_CAP = 0.6    # penalise unvetted web-only answers
 
     def __init__(self, settings: Settings | None = None) -> None:
         self.settings = settings or get_settings()
         self.vector_store = load_vector_store(self.settings)
-        self.retriever = self.vector_store.as_retriever(
-            search_kwargs={"k": self.settings.top_k}
-        )
         self.llm = build_chat_llm(self.settings, temperature=0.1)
         self.grader = build_chat_llm(self.settings, temperature=0.0)
         self.rewriter = build_chat_llm(self.settings, temperature=0.2)
@@ -171,9 +183,40 @@ class CRAGPipeline:
 
     # ---------- graph nodes ----------
     def _retrieve(self, state: CRAGState) -> CRAGState:
-        docs = self.retriever.invoke(state["question"])
-        trace = state.get("trace", []) + [f"retrieved {len(docs)} passages"]
-        return {"documents": docs, "trace": trace}
+        pairs = self.vector_store.similarity_search_with_score(
+            state["question"], k=self.settings.top_k
+        )
+        threshold = self.settings.topic_score_threshold
+        trace = state.get("trace", [])
+        if not pairs:
+            return {
+                "documents": [],
+                "top_score": 0.0,
+                "off_topic": True,
+                "trace": trace + ["retrieved 0 passages → off-topic"],
+            }
+        docs = [doc for doc, _ in pairs]
+        top_score = max(score for _, score in pairs)
+        off_topic = top_score < threshold
+        trace = trace + [f"retrieved {len(docs)} passages (top cosine {top_score:.2f})"]
+        if off_topic:
+            trace = trace + [
+                f"topic gate: {top_score:.2f} < {threshold} → refuse"
+            ]
+        return {
+            "documents": docs,
+            "top_score": top_score,
+            "off_topic": off_topic,
+            "trace": trace,
+        }
+
+    def _refuse(self, state: CRAGState) -> CRAGState:
+        return {
+            "answer": OFF_TOPIC_REFUSAL,
+            "citations": [],
+            "confidence": 0.0,
+            "confidence_label": "OUT OF SCOPE",
+        }
 
     def _grade(self, state: CRAGState) -> CRAGState:
         docs = state.get("documents") or []
@@ -265,35 +308,40 @@ class CRAGPipeline:
                     f"{MEDICAL_DISCLAIMER}"
                 ),
                 "citations": [],
+                "confidence": 0.0,
+                "confidence_label": label_confidence(0.0),
             }
-        chain = ANSWER_PROMPT | self.llm
-        response = chain.invoke(
-            {"question": question, "context": format_context(docs)}
-        )
+        answerer = self.llm.with_structured_output(AnsweredResponse)
+        chain = ANSWER_PROMPT | answerer
+        try:
+            result: AnsweredResponse = chain.invoke(
+                {"question": question, "context": format_context(docs)}
+            )
+            answer = result.answer.strip()
+            confidence = float(result.confidence)
+        except Exception:  # noqa: BLE001 — degrade to a plain-text answer call
+            plain = ANSWER_PROMPT | self.llm
+            response = plain.invoke(
+                {"question": question, "context": format_context(docs)}
+            )
+            answer = response.content.strip()
+            confidence = 0.5
+        confidence = max(0.0, min(1.0, confidence))
+        # Cap confidence when we only had web sources (no vetted local docs).
+        if not state.get("documents") and state.get("web_documents"):
+            confidence = min(confidence, self.WEB_ONLY_CONF_CAP)
         return {
-            "answer": response.content.strip(),
+            "answer": answer,
             "citations": format_citations(docs),
+            "confidence": confidence,
+            "confidence_label": label_confidence(confidence),
         }
 
-    def _score_confidence(self, state: CRAGState) -> CRAGState:
-        docs = (state.get("documents") or []) + (state.get("web_documents") or [])
-        if not docs or not state.get("answer"):
-            return {"confidence": 0.0, "confidence_label": label_confidence(0.0)}
-        chain = CONFIDENCE_PROMPT | self.grader
-        raw = chain.invoke(
-            {
-                "question": state.get("original_question") or state["question"],
-                "context": format_context(docs),
-                "answer": state["answer"],
-            }
-        )
-        score = parse_confidence(raw.content)
-        # penalise web-only answers slightly (unvetted sources)
-        if not state.get("documents") and state.get("web_documents"):
-            score = min(score, 0.6)
-        return {"confidence": score, "confidence_label": label_confidence(score)}
-
     # ---------- routing ----------
+    @staticmethod
+    def _route_after_retrieve(state: CRAGState) -> str:
+        return "refuse" if state.get("off_topic") else "grade"
+
     @staticmethod
     def _route_from_decision(state: CRAGState) -> str:
         action = state.get("action", "generate")
@@ -305,15 +353,20 @@ class CRAGPipeline:
     def _build_graph(self):
         graph = StateGraph(CRAGState)
         graph.add_node("retrieve", self._retrieve)
+        graph.add_node("refuse", self._refuse)
         graph.add_node("grade", self._grade)
         graph.add_node("decide", self._decide)
         graph.add_node("rewrite", self._rewrite)
         graph.add_node("web_search", self._web_search)
         graph.add_node("generate", self._generate)
-        graph.add_node("score_confidence", self._score_confidence)
 
         graph.set_entry_point("retrieve")
-        graph.add_edge("retrieve", "grade")
+        graph.add_conditional_edges(
+            "retrieve",
+            self._route_after_retrieve,
+            {"refuse": "refuse", "grade": "grade"},
+        )
+        graph.add_edge("refuse", END)
         graph.add_edge("grade", "decide")
         graph.add_conditional_edges(
             "decide",
@@ -322,17 +375,11 @@ class CRAGPipeline:
         )
         graph.add_edge("rewrite", "web_search")
         graph.add_edge("web_search", "generate")
-        graph.add_edge("generate", "score_confidence")
-        graph.add_edge("score_confidence", END)
+        graph.add_edge("generate", END)
         return graph.compile()
 
     def ask(self, question: str) -> dict:
         logger.info("\n[CRAG] ▶ starting: %r", question[:80])
-        if not is_healthcare_question(self.grader, question):
-            logger.info("[CRAG]    topic gate: OFF-TOPIC → refused")
-            TELEMETRY.record_node("topic_gate")
-            return off_topic_response(question)
-        TELEMETRY.record_node("topic_gate")
         final: dict = {"question": question, "original_question": question}
         prev = "START"
         for step in self.graph.stream(

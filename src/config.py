@@ -28,6 +28,7 @@ class Settings:
     top_k: int
     chunk_size: int
     chunk_overlap: int
+    topic_score_threshold: float
 
 
 def _require(name: str, hint: str) -> str:
@@ -61,4 +62,5 @@ def get_settings() -> Settings:
         top_k=int(os.getenv("TOP_K", "5")),
         chunk_size=int(os.getenv("CHUNK_SIZE", "1000")),
         chunk_overlap=int(os.getenv("CHUNK_OVERLAP", "150")),
+        topic_score_threshold=float(os.getenv("TOPIC_SCORE_THRESHOLD", "0.20")),
     )
