@@ -14,8 +14,10 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Literal
 
+import json
+
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
@@ -150,7 +152,7 @@ async def ask(payload: AskRequest) -> AskResponse:
     pipeline = _get_pipeline(payload.mode)
     TELEMETRY.start_request(payload.mode, payload.question)
     try:
-        result = pipeline.ask(payload.question)
+        result = await pipeline.ask(payload.question)
     except Exception as exc:  # noqa: BLE001
         TELEMETRY.end_request(ok=False, error=str(exc))
         logger.exception("Pipeline error")
@@ -165,6 +167,42 @@ async def ask(payload: AskRequest) -> AskResponse:
         confidence=float(result.get("confidence", 0.0)),
         confidence_label=result.get("confidence_label", "VERY LOW"),
         trace=list(result.get("trace") or []),
+    )
+
+
+@app.post("/api/ask/stream")
+async def ask_stream(payload: AskRequest):
+    """Stream pipeline events as NDJSON so the frontend can render tokens live.
+
+    Response body is a series of newline-delimited JSON events, one per line:
+        {"type": "trace", "message": "..."}
+        {"type": "token", "text": "..."}
+        {"type": "meta",  "citations": [...], "confidence": ..., ...}
+        {"type": "error", "message": "..."}
+        {"type": "done"}
+    """
+    pipeline = _get_pipeline(payload.mode)
+    TELEMETRY.start_request(payload.mode, payload.question)
+
+    async def emit():
+        errored = False
+        try:
+            async for event in pipeline.stream(payload.question):
+                yield json.dumps(event) + "\n"
+                if event.get("type") == "error":
+                    errored = True
+        except Exception as exc:  # noqa: BLE001
+            errored = True
+            logger.exception("Streaming pipeline error")
+            yield json.dumps({"type": "error", "message": str(exc)}) + "\n"
+        finally:
+            TELEMETRY.end_request(ok=not errored)
+            yield json.dumps({"type": "done"}) + "\n"
+
+    return StreamingResponse(
+        emit(),
+        media_type="application/x-ndjson",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
 
 

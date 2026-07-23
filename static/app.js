@@ -27,53 +27,90 @@ const CONF_TONE = {
 const prefersReducedMotion =
     window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
-function streamText(el, text) {
-    return new Promise((resolve) => {
-        el.textContent = "";
-        el.classList.remove("thinking");
-        el.classList.add("streaming");
+// TokenPacer smooths incoming LLM tokens into a character-by-character reveal.
+// It absorbs bursts (tokens arrive 5–30 chars at a time) and drips them out at
+// a natural reading pace, catching up when the buffer grows large.
+class TokenPacer {
+    constructor(el, onDrained) {
+        this.el = el;
+        this.pending = "";
+        this.rendered = "";
+        this.finished = false;
+        this.ticking = false;
+        this.onDrained = onDrained;
+    }
 
-        if (prefersReducedMotion || !text) {
-            el.textContent = text || "";
-            el.classList.remove("streaming");
-            resolve();
+    push(text) {
+        if (!text) return;
+        if (this.rendered === "" && this.pending === "") {
+            this.el.textContent = "";
+            this.el.classList.remove("thinking");
+        }
+        this.pending += text;
+        this._ensureTicking();
+    }
+
+    finish() {
+        this.finished = true;
+        this._ensureTicking();
+    }
+
+    _ensureTicking() {
+        if (this.ticking) return;
+        this.ticking = true;
+        this.el.classList.add("streaming");
+        if (prefersReducedMotion) {
+            // Flush immediately, no per-char reveal.
+            this._drainAll();
             return;
         }
+        this._tick();
+    }
 
-        // Reveal a small chunk each animation frame, with natural pauses at
-        // punctuation — feels like transcription rather than a metronome.
-        const chunk = text.length > 1200 ? 3 : text.length > 400 ? 2 : 1;
-        let i = 0;
-        let lastTick = performance.now();
-        let pause = 0;
+    _drainAll() {
+        this.rendered += this.pending;
+        this.pending = "";
+        this.el.textContent = this.rendered;
+        if (this.finished) this._done();
+        else {
+            // stay armed for more
+            this.ticking = false;
+        }
+    }
 
-        const tick = (now) => {
-            if (pause > 0) {
-                pause -= now - lastTick;
-                lastTick = now;
-                requestAnimationFrame(tick);
+    _tick() {
+        if (this.pending.length === 0) {
+            if (this.finished) {
+                this._done();
                 return;
             }
-            const step = Math.min(chunk, text.length - i);
-            el.textContent = text.slice(0, i + step);
-            const justAdded = text.slice(i, i + step);
-            i += step;
+            // idle — poll next frame for new tokens
+            requestAnimationFrame(() => this._tick());
+            return;
+        }
+        // Chunk size grows with backlog to catch up without ever "dumping".
+        const n = this.pending.length;
+        const chunk = n > 400 ? 6 : n > 150 ? 3 : n > 40 ? 2 : 1;
+        const step = this.pending.slice(0, chunk);
+        this.rendered += step;
+        this.pending = this.pending.slice(chunk);
+        this.el.textContent = this.rendered;
 
-            // Small pauses after sentence-ending punctuation, tiny after commas.
-            if (/[.!?][\s)"']?$/.test(justAdded)) pause = 90;
-            else if (/[,;:][\s)"']?$/.test(justAdded)) pause = 40;
-            else pause = 8;
+        const last = this.rendered.slice(-1);
+        const prev = this.rendered.slice(-2, -1);
+        let delay = 6;
+        if (/[.!?]/.test(last) && !/\d/.test(prev)) delay = 55;
+        else if (/[,;:]/.test(last)) delay = 22;
+        else if (last === "\n") delay = 30;
 
-            lastTick = now;
-            if (i < text.length) {
-                requestAnimationFrame(tick);
-            } else {
-                el.classList.remove("streaming");
-                resolve();
-            }
-        };
-        requestAnimationFrame(tick);
-    });
+        setTimeout(() => this._tick(), delay);
+    }
+
+    _done() {
+        this.el.classList.remove("streaming");
+        this.ticking = false;
+        this.onDrained?.();
+    }
 }
 
 async function checkHealth() {
@@ -118,12 +155,9 @@ function renderPending(container, title) {
     return node;
 }
 
-async function fillResult(node, data) {
-    const answerEl = node.querySelector(".answer");
-    answerEl.classList.remove("thinking");
-
-    const conf = data.confidence ?? 0;
-    const label = data.confidence_label || "VERY LOW";
+function applyMeta(node, meta) {
+    const conf = meta.confidence ?? 0;
+    const label = meta.confidence_label || "VERY LOW";
     const labelEl = node.querySelector(".conf-label");
     labelEl.textContent = label;
     labelEl.setAttribute("data-label", label);
@@ -133,18 +167,14 @@ async function fillResult(node, data) {
     fill.style.width = Math.round(Math.min(Math.max(conf, 0), 1) * 100) + "%";
     fill.style.background = CONF_COLORS[label] || "var(--ink)";
 
-    // Mark the card as finalized so the left-margin stroke inks in.
     node.classList.add("done");
     const tone = CONF_TONE[label];
     if (tone) node.classList.add(tone);
 
-    // Stream the answer character-by-character in the serif body face.
-    await streamText(answerEl, data.answer || "(no answer returned)");
-
     const citationList = node.querySelector(".citation-list");
     citationList.innerHTML = "";
-    if (data.citations && data.citations.length) {
-        for (const c of data.citations) {
+    if (meta.citations && meta.citations.length) {
+        for (const c of meta.citations) {
             const li = document.createElement("li");
             const page = c.page != null ? `, p.${c.page}` : "";
             li.innerHTML =
@@ -152,28 +182,29 @@ async function fillResult(node, data) {
                 `<span class="snippet">${escapeHtml(c.snippet)}</span>`;
             citationList.appendChild(li);
         }
+        node.querySelector("details.citations").style.display = "";
     } else {
-        const li = document.createElement("li");
-        li.textContent = "No citations returned.";
-        citationList.appendChild(li);
+        node.querySelector("details.citations").style.display = "none";
     }
 
+    if (meta.disclaimer) {
+        disclaimerEl.textContent = meta.disclaimer;
+    }
+}
+
+function applyTrace(node, messages) {
     const traceList = node.querySelector(".trace-list");
     const traceDetails = node.querySelector("details.trace");
     traceList.innerHTML = "";
-    if (data.trace && data.trace.length) {
+    if (messages && messages.length) {
         traceDetails.style.display = "";
-        for (const step of data.trace) {
+        for (const step of messages) {
             const li = document.createElement("li");
             li.textContent = step;
             traceList.appendChild(li);
         }
     } else {
         traceDetails.style.display = "none";
-    }
-
-    if (data.disclaimer) {
-        disclaimerEl.textContent = data.disclaimer;
     }
 }
 
@@ -201,8 +232,8 @@ function escapeHtml(str) {
         .replace(/'/g, "&#39;");
 }
 
-async function callAsk(mode, question) {
-    const resp = await fetch("/api/ask", {
+async function streamAsk(mode, question, handlers) {
+    const resp = await fetch("/api/ask/stream", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ mode, question }),
@@ -215,15 +246,59 @@ async function callAsk(mode, question) {
         } catch {}
         throw new Error(msg);
     }
-    return resp.json();
+
+    const reader = resp.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    const dispatch = (line) => {
+        if (!line) return;
+        let event;
+        try { event = JSON.parse(line); } catch { return; }
+        switch (event.type) {
+            case "trace": handlers.onTrace?.(event.message); break;
+            case "token": handlers.onToken?.(event.text); break;
+            case "meta":  handlers.onMeta?.(event); break;
+            case "error": throw new Error(event.message || "stream error");
+            case "done":  handlers.onDone?.(); break;
+        }
+    };
+    while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        let i;
+        while ((i = buffer.indexOf("\n")) !== -1) {
+            const line = buffer.slice(0, i).trim();
+            buffer = buffer.slice(i + 1);
+            dispatch(line);
+        }
+    }
+    if (buffer.trim()) dispatch(buffer.trim());
 }
 
 async function runAsk(mode, question, container, title) {
     const node = renderPending(container, title);
+    const answerEl = node.querySelector(".answer");
+    const traceMessages = [];
+    let metaData = null;
+
+    // Pacer drains real tokens into the character-by-character reveal.
+    // When the pacer finishes, we apply confidence, citations, and trace.
+    const finalize = () => {
+        if (metaData) applyMeta(node, metaData);
+        applyTrace(node, traceMessages);
+    };
+    const pacer = new TokenPacer(answerEl, finalize);
+
     try {
-        const data = await callAsk(mode, question);
-        await fillResult(node, data);
+        await streamAsk(mode, question, {
+            onTrace: (msg) => traceMessages.push(msg),
+            onToken: (text) => pacer.push(text),
+            onMeta: (event) => { metaData = event; },
+        });
+        pacer.finish();
     } catch (err) {
+        pacer.finish();
         fillError(node, err.message || String(err));
     }
 }
