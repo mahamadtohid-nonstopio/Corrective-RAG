@@ -8,11 +8,12 @@ Run with:
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Literal
+from typing import Callable, Literal
 
 import json
 
@@ -31,7 +32,7 @@ logger = logging.getLogger("hkn.server")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 # Make sure the pipeline loggers propagate to the root handler (uvicorn --reload
 # sometimes overrides root config; force propagation here).
-for name in ("hkn.rag", "hkn.crag", "hkn.server"):
+for name in ("hkn.rag", "hkn.crag", "hkn.gate", "hkn.server"):
     _lg = logging.getLogger(name)
     _lg.setLevel(logging.INFO)
     _lg.propagate = True
@@ -41,6 +42,10 @@ STATIC_DIR = BASE_DIR / "static"
 
 # Lazily-populated pipeline singletons.
 _state: dict[str, object] = {}
+
+WARMUP_TIMEOUT_SECONDS = 45
+WARMUP_PROMPT = "ping"
+WARMUP_MAX_TOKENS = 8
 
 
 def _load_pipelines() -> None:
@@ -57,6 +62,57 @@ def _load_pipelines() -> None:
     logger.info("Pipelines ready.")
 
 
+def _warm_up_embeddings(rag: RAGPipeline) -> None:
+    rag.vector_store.embeddings.embed_query(WARMUP_PROMPT)
+
+
+def _warm_up_chat(rag: RAGPipeline) -> None:
+    rag.llm.bind(max_tokens=WARMUP_MAX_TOKENS).invoke(WARMUP_PROMPT)
+
+
+WARMUP_STEPS: tuple[tuple[str, Callable[[RAGPipeline], None]], ...] = (
+    ("embedding", _warm_up_embeddings),
+    ("chat", _warm_up_chat),
+)
+
+
+def _warm_up_models(rag: RAGPipeline) -> None:
+    """Prime the embedding and chat endpoints with one tiny call each.
+
+    Steps are independent: one failing is logged and the next still runs.
+    Runs outside any request, so no telemetry trace is active and the LLM
+    call's telemetry callback is a no-op — it never shows in /api/traces.
+    """
+    for name, warm_up in WARMUP_STEPS:
+        try:
+            warm_up(rag)
+            logger.info("Warm-up: %s endpoint ready.", name)
+        except Exception:  # noqa: BLE001 — warm-up is optional
+            logger.warning("Warm-up: %s endpoint failed.", name, exc_info=True)
+
+
+async def _warm_up_best_effort() -> None:
+    """Warm up off the event loop, bounded by a timeout; never raises.
+
+    On timeout the worker thread is abandoned (threads can't be cancelled)
+    and finishes in the background; startup proceeds regardless.
+    """
+    settings: Settings = _state["settings"]  # type: ignore[assignment]
+    if not settings.warmup_on_startup:
+        logger.info("Warm-up skipped (WARMUP_ON_STARTUP=false).")
+        return
+    rag: RAGPipeline = _state["rag"]  # type: ignore[assignment]
+    try:
+        await asyncio.wait_for(
+            asyncio.to_thread(_warm_up_models, rag), timeout=WARMUP_TIMEOUT_SECONDS
+        )
+        logger.info("Warm-up finished.")
+    except asyncio.TimeoutError:
+        logger.warning("Warm-up timed out after %ss; continuing startup.", WARMUP_TIMEOUT_SECONDS)
+    except Exception:  # noqa: BLE001 — warm-up is optional, startup must not fail
+        logger.warning("Warm-up aborted; continuing startup.", exc_info=True)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     try:
@@ -64,6 +120,8 @@ async def lifespan(app: FastAPI):
     except Exception as exc:  # noqa: BLE001 — surface reason at /api/health
         logger.exception("Failed to initialise pipelines: %s", exc)
         _state["startup_error"] = str(exc)
+    else:
+        await _warm_up_best_effort()
     yield
 
 

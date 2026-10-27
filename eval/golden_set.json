@@ -1,0 +1,83 @@
+{
+  "description": "Golden set for the offline RAG-vs-CRAG comparison (evaluate.py). Categories describe the question's coverage by the indexed corpus in ./data. A null reference means no defensible ground-truth answer is asserted, so AnswerAccuracy is skipped for that row and only the two reference-free NVIDIA metrics apply.",
+  "categories": {
+    "in-corpus": "Fully answerable from ./data; references are quoted from those files.",
+    "not-in-corpus": "Medical, zero coverage in ./data. RAG must either refuse or confabulate from irrelevant passages; CRAG should web-correct.",
+    "partial": "Medical, partially adjacent to ./data but the specific answer is not in it.",
+    "off-topic": "Non-medical; both pipelines should refuse via the topic gate."
+  },
+  "questions": [
+    {
+      "id": "in-corpus-01",
+      "category": "in-corpus",
+      "question": "What is the preferred glucose-lowering agent for an adult with type 2 diabetes and CKD with eGFR 40 and albuminuria?",
+      "reference": "An SGLT2 inhibitor with proven kidney benefit (empagliflozin, dapagliflozin or canagliflozin) is preferred for adults with type 2 diabetes and CKD with eGFR 20-60 mL/min/1.73 m^2 and/or albuminuria, to reduce CKD progression and cardiovascular events (Evidence A). Add the non-steroidal mineralocorticoid receptor antagonist finerenone when albuminuria is present and eGFR is at least 25 mL/min/1.73 m^2 in a patient already on a maximally tolerated ACE inhibitor or ARB. Metformin may be continued at eGFR of at least 30 mL/min/1.73 m^2, with dose reduction below 45."
+    },
+    {
+      "id": "in-corpus-02",
+      "category": "in-corpus",
+      "question": "What is the target mean arterial pressure and first-line vasopressor in septic shock?",
+      "reference": "Target a mean arterial pressure of at least 65 mmHg, with higher targets considered in previously hypertensive patients if perfusion improves. Norepinephrine is the first-line vasopressor, started if the patient is hypotensive during or after fluid resuscitation. Vasopressin 0.03 U/min is added second-line to reduce the norepinephrine dose or when MAP is inadequate on norepinephrine alone, and hydrocortisone 200 mg/day IV is added in refractory septic shock on ongoing vasopressors."
+    },
+    {
+      "id": "in-corpus-03",
+      "category": "in-corpus",
+      "question": "What apixaban dose is recommended for an 82-year-old with non-valvular AF who weighs 58 kg?",
+      "reference": "Apixaban 2.5 mg twice daily. The standard dose is 5 mg twice daily, reduced to 2.5 mg twice daily when at least two of the following are present: age 80 or over, weight 60 kg or less, serum creatinine 1.5 mg/dL or above. This patient meets two criteria (age 82 and weight 58 kg), so the reduced dose applies."
+    },
+    {
+      "id": "in-corpus-04",
+      "category": "in-corpus",
+      "question": "Which antihypertensive class should be first-line for an adult with chronic kidney disease and albuminuria?",
+      "reference": "First-line therapy should include an ACE inhibitor or an ARB, regardless of race, when albuminuria is present in an adult with CKD and hypertension. The general blood-pressure target is below 130/80 mmHg, and pharmacotherapy is started at 130/80 mmHg or above in adults with CKD."
+    },
+    {
+      "id": "in-corpus-05",
+      "category": "in-corpus",
+      "question": "What is the preferred Step 3 controller regimen for adult asthma under GINA 2024 Track 1?",
+      "reference": "Low-dose maintenance ICS-formoterol plus as-needed ICS-formoterol as the reliever, that is a MART regimen. Track 1 uses as-needed low-dose ICS-formoterol as the preferred reliever at every step; Step 4 escalates the maintenance component to medium-dose ICS-formoterol."
+    },
+    {
+      "id": "in-corpus-06",
+      "category": "in-corpus",
+      "question": "How much crystalloid should be given in the first hour of sepsis resuscitation, and what lactate value triggers it?",
+      "reference": "Begin rapid crystalloid administration at 30 mL/kg within the first hour for hypotension or a lactate of 4 mmol/L or more, reassessing after each 500 mL bolus. Lactate is measured within the hour and re-measured if the initial value exceeds 2 mmol/L. After initial resuscitation, guide further fluid with dynamic measures such as passive leg raise or stroke-volume variation rather than static CVP."
+    },
+    {
+      "id": "not-in-corpus-01",
+      "category": "not-in-corpus",
+      "question": "What is hereditary cancer?",
+      "reference": null
+    },
+    {
+      "id": "not-in-corpus-02",
+      "category": "not-in-corpus",
+      "question": "How is Lynch syndrome diagnosed and what cancer surveillance is recommended?",
+      "reference": null
+    },
+    {
+      "id": "not-in-corpus-03",
+      "category": "not-in-corpus",
+      "question": "What is CAR-T cell therapy and which leukaemias is it approved for?",
+      "reference": null
+    },
+    {
+      "id": "partial-01",
+      "category": "partial",
+      "question": "A patient on apixaban has a major GI bleed. How is it reversed, and what is the andexanet alfa dosing?",
+      "reference": "Stop apixaban, resuscitate and achieve local haemostasis, then give the specific reversal agent andexanet alfa; four-factor prothrombin complex concentrate at roughly 50 units/kg is the alternative where andexanet alfa is unavailable. Andexanet alfa is dosed by the last apixaban dose and the time since it: the low-dose regimen is a 400 mg IV bolus at about 30 mg/min followed by a 4 mg/min infusion for up to 120 minutes, and the high-dose regimen is an 800 mg IV bolus followed by 8 mg/min for up to 120 minutes. The high-dose regimen is used when the last apixaban dose was more than 5 mg and was taken within the preceding 8 hours or at an unknown time."
+    },
+    {
+      "id": "partial-02",
+      "category": "partial",
+      "question": "What is the role of tirzepatide in type 2 diabetes and its cardiovascular outcomes?",
+      "reference": "Tirzepatide is a once-weekly dual GIP and GLP-1 receptor agonist used as a glucose-lowering agent in type 2 diabetes, producing larger A1C and weight reductions than selective GLP-1 receptor agonists in the SURPASS programme. Its dedicated cardiovascular outcomes trial, SURPASS-CVOT, reported in 2025 that tirzepatide was non-inferior to dulaglutide for major adverse cardiovascular events; it has not demonstrated cardiovascular superiority against placebo, so guidelines still name agents with proven CV benefit, such as semaglutide, liraglutide, dulaglutide or an SGLT2 inhibitor, where cardiovascular risk reduction is the goal."
+    },
+    {
+      "id": "off-topic-01",
+      "category": "off-topic",
+      "question": "What is a good recipe for sourdough bread with a crispy crust?",
+      "reference": null
+    }
+  ]
+}

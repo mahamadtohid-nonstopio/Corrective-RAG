@@ -6,8 +6,13 @@ The embedding model (``nvidia/nv-embedqa-e5-v5``) is asymmetric, so we use
 automatically.
 
 If the configured Pinecone index does not yet exist, we create it as a
-serverless index in the configured cloud/region, matching the embedding's
-1024 dimensions and cosine similarity.
+serverless index in the configured cloud/region, matching the embedding
+model's dimension (``Settings.embedding_dimension``) and cosine similarity.
+Swapping ``EMBEDDING_MODEL`` almost always means the vector width changes
+too (e.g. nv-embedqa-e5-v5 → 1024, nemotron-3.5-embed-1b → 2048), so the
+index name and ``EMBEDDING_DIMENSION`` must be updated together — an
+existing index can't be resized in place, and vectors from one embedding
+model are meaningless to another.
 """
 from __future__ import annotations
 
@@ -22,9 +27,6 @@ from pinecone import Pinecone, ServerlessSpec
 from .config import Settings
 
 logger = logging.getLogger(__name__)
-
-# nvidia/nv-embedqa-e5-v5 → 1024-dim vectors. Adjust if you swap models.
-_EXPECTED_DIM = 1024
 
 
 def build_embeddings(settings: Settings) -> NVIDIAEmbeddings:
@@ -48,13 +50,13 @@ def _ensure_index(settings: Settings) -> None:
     logger.info(
         "Creating Pinecone index %r (dim=%d, cloud=%s, region=%s) …",
         settings.pinecone_index,
-        _EXPECTED_DIM,
+        settings.embedding_dimension,
         settings.pinecone_cloud,
         settings.pinecone_region,
     )
     pc.create_index(
         name=settings.pinecone_index,
-        dimension=_EXPECTED_DIM,
+        dimension=settings.embedding_dimension,
         metric="cosine",
         spec=ServerlessSpec(
             cloud=settings.pinecone_cloud,

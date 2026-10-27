@@ -1,0 +1,14 @@
+# Offline evaluation only — deliberately NOT part of requirements.txt.
+#
+# ragas pulls in datasets/pandas/pyarrow/scipy (~80 MB) that the serving image
+# has no use for. Install it alongside the runtime requirements only when you
+# want to run evaluate.py:
+#
+#     pip install -r requirements.txt -r requirements-eval.txt
+#
+# Pinned exactly: RAGAS moves fast and 0.4 deprecates the metric API that 1.0
+# removes, so an unpinned install would silently change what the numbers mean.
+# 0.4.3 also still imports langchain_community.chat_models.vertexai, a module
+# dropped in the langchain-community 0.4 line this app pins — ragas_compat.py
+# stubs it rather than downgrading the app's own dependency floors.
+ragas==0.4.3

@@ -245,6 +245,48 @@ textarea:focus {
     background: var(--card);
 }
 
+/* Scenario chips — preset demo questions under the textarea */
+
+.scenarios {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 10px 14px;
+    margin-top: 16px;
+}
+.scenarios-label {
+    font-size: 10.5px;
+    letter-spacing: 0.18em;
+    color: var(--muted);
+    text-transform: uppercase;
+    font-weight: 600;
+}
+.scenario-chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+.scenario-chip {
+    background: transparent;
+    color: var(--ink-soft);
+    border: var(--hair);
+    border-radius: 0;
+    padding: 5px 12px;
+    font-family: var(--serif);
+    font-size: 13.5px;
+    font-style: italic;
+    cursor: pointer;
+    transition: background 120ms ease, color 120ms ease, border-color 120ms ease;
+}
+.scenario-chip:hover:not(:disabled),
+.scenario-chip:focus-visible {
+    background: var(--ink);
+    color: var(--card);
+    border-color: var(--ink);
+    outline: none;
+}
+.scenario-chip:disabled { color: var(--muted-2); border-color: var(--rule); cursor: not-allowed; }
+
 .controls {
     display: flex;
     justify-content: space-between;

@@ -1,14 +1,36 @@
-fastapi>=0.115.0
-uvicorn[standard]>=0.30.0
-pydantic>=2.0.0
-python-dotenv>=1.0.0
-openai>=1.50.0
-langchain-core>=0.3.0
-langchain-community>=0.3.0
-langchain-openai>=0.2.0
-langchain-nvidia-ai-endpoints>=0.3.0
-langchain-text-splitters>=0.3.0
-langchain-pinecone>=0.2.0
-pinecone>=5.0.0
-pypdf>=4.0.0
-tavily-python>=0.5.0
+# Floors match what this app is actually developed and demoed against — the
+# LangChain 1.x line. The previous 0.3.x floors predated a major version and
+# would let a fresh install resolve to libraries this code no longer matches
+# (ChatOpenAI config handling and the Tavily integration both moved in 1.x).
+langchain>=1.3,<2
+langchain-core>=1.4,<2
+langchain-community>=0.4,<1
+langchain-openai>=1.3,<2
+langchain-nvidia-ai-endpoints>=1.4,<2
+langchain-text-splitters>=1.1,<2
+langchain-pinecone>=0.2.13,<1
+# Replaces tavily-python: the deprecated TavilySearchResults it backed is gone
+# from the langchain-community 0.4 line, and crag_agent.py imports TavilySearch.
+langchain-tavily>=0.2.18,<1
+langsmith>=0.10,<1
+
+openai>=2.0,<3
+pinecone>=7.0,<8
+pydantic>=2.13,<3
+
+fastapi>=0.115
+uvicorn[standard]>=0.30
+python-dotenv>=1.0
+requests>=2.32
+
+# Document loading. PDFs go through PyPDFLoader (pypdf); .md/.txt use the
+# stdlib TextLoader. Dropped from this list because nothing imports them:
+# langgraph (the pipelines are hand-rolled async generators, not StateGraphs),
+# rank-bm25, jinja2 (no server-side templates — the UI is static files), and
+# unstructured (a large tree that no loader in this project uses). tiktoken
+# arrives transitively with langchain-openai.
+pypdf>=6.0
+
+# Offline RAG-vs-CRAG evaluation (evaluate.py) has its own pin list, kept out of
+# this file so ragas' data-science tree never ships in the runtime image:
+# requirements-eval.txt

@@ -1,0 +1,43 @@
+# Virtual environments — never ship these into the image
+ragenv/
+ragenvironment/
+venv/
+.venv/
+
+# Python caches and build artefacts
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+build/
+dist/
+*.egg-info/
+
+# Local IDE / OS files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Secrets — inject via env_file at runtime instead of baking into the image
+.env
+.env.*
+!.env.example
+
+# Notes, deck build script, and generated artefacts don't belong in the image
+build_deck.py
+*.pptx
+freeze.txt
+
+# Git
+.git/
+.gitignore
+.gitattributes
+
+# Docker artefacts themselves
+Dockerfile
+docker-compose*.yml
+.dockerignore

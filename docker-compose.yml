@@ -1,0 +1,56 @@
+# Healthcare Knowledge Navigator — compose stack.
+#
+# The app talks to Pinecone (vectors), NVIDIA (LLM + embeddings), and
+# optionally Tavily (web fallback) — all cloud services — so this stack is
+# just the FastAPI app. Ingestion is a one-shot job behind a compose profile.
+#
+# Usage:
+#   docker compose up --build            # start the app on http://localhost:8000
+#   docker compose --profile ingest run --rm ingest   # ingest ./data into Pinecone
+#   docker compose logs -f app           # follow logs
+#   docker compose down                  # stop
+#
+# Secrets come from .env (never baked into the image). Copy .env.example → .env
+# and fill in NVIDIA_API_KEY + PINECONE_API_KEY at minimum.
+
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: hkn-app:latest
+    container_name: hkn-app
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    environment:
+      # Bind to all interfaces inside the container; uvicorn defaults already
+      # do this via the CMD, but pinning it here documents the contract.
+      UVICORN_HOST: "0.0.0.0"
+      UVICORN_PORT: "8000"
+    volumes:
+      # Mount source docs read-only so re-ingest picks up new files without a rebuild.
+      - ./data:/app/data:ro
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8000/api/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+  # One-shot ingestion — only runs when the "ingest" profile is activated:
+  #   docker compose --profile ingest run --rm ingest
+  ingest:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: hkn-app:latest
+    container_name: hkn-ingest
+    profiles: ["ingest"]
+    env_file:
+      - .env
+    volumes:
+      - ./data:/app/data:ro
+    command: ["python", "ingest.py"]

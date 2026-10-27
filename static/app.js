@@ -9,6 +9,39 @@ const totalsEl = $("#traces-totals");
 const historyEl = $("#traces-history");
 const refreshTracesBtn = $("#refresh-traces");
 const resetTracesBtn = $("#reset-traces");
+const scenarioChipsEl = $("#scenario-chips");
+
+const COMPARE_MODE = "compare";
+
+// Demo questions, each chosen to exercise a distinct pipeline path against the
+// indexed corpus in ./data (ADA diabetes, GINA asthma, JNC8 hypertension,
+// sepsis bundle, AF anticoagulation).
+const DEMO_SCENARIOS = [
+    {
+        label: "In corpus → both agree",
+        question:
+            "What is the preferred glucose-lowering agent for an adult with type 2 diabetes and CKD with eGFR 40 mL/min/1.73 m² and albuminuria?",
+    },
+    {
+        label: "Partial coverage → CRAG supplements",
+        question:
+            "A patient on apixaban for atrial fibrillation presents with a major GI bleed. How should the anticoagulation be reversed, and what is the andexanet alfa dosing?",
+    },
+    {
+        label: "Medical, not in corpus → CRAG web-corrects",
+        question:
+            "What is lecanemab, and which patients with early Alzheimer's disease are eligible for treatment with it?",
+    },
+    {
+        label: "Not medical → both refuse",
+        question: "What is a good recipe for sourdough bread with a crispy crust?",
+    },
+    {
+        label: "Dosing detail → cited specifics",
+        question:
+            "What apixaban dose is recommended for an 82-year-old with non-valvular atrial fibrillation who weighs 58 kg, and what criteria trigger the dose reduction?",
+    },
+];
 
 const CONF_COLORS = {
     HIGH: "#2a5a3e",
@@ -315,6 +348,37 @@ function stopLivePoll() {
     }
 }
 
+function setRequestInFlight(inFlight) {
+    askBtn.disabled = inFlight;
+    askBtn.textContent = inFlight ? "Retrieving" : "Ask";
+    for (const chip of scenarioChipsEl.querySelectorAll("button")) {
+        chip.disabled = inFlight;
+    }
+}
+
+function selectMode(mode) {
+    const radio = document.querySelector(`input[name="mode"][value="${mode}"]`);
+    if (radio) radio.checked = true;
+}
+
+function runScenario(scenario) {
+    questionEl.value = scenario.question;
+    selectMode(COMPARE_MODE);
+    askBtn.click();
+}
+
+function renderScenarioChips() {
+    for (const scenario of DEMO_SCENARIOS) {
+        const chip = document.createElement("button");
+        chip.type = "button";
+        chip.className = "scenario-chip";
+        chip.textContent = scenario.label;
+        chip.title = scenario.question;
+        chip.addEventListener("click", () => runScenario(scenario));
+        scenarioChipsEl.appendChild(chip);
+    }
+}
+
 askBtn.addEventListener("click", async () => {
     const question = questionEl.value.trim();
     if (question.length < 3) {
@@ -323,14 +387,13 @@ askBtn.addEventListener("click", async () => {
     }
     const mode = document.querySelector('input[name="mode"]:checked').value;
     resultsEl.innerHTML = "";
-    resultsEl.className = "results" + (mode === "compare" ? " compare" : "");
+    resultsEl.className = "results" + (mode === COMPARE_MODE ? " compare" : "");
 
-    askBtn.disabled = true;
-    askBtn.textContent = "Retrieving";
+    setRequestInFlight(true);
     startLivePoll();
 
     try {
-        if (mode === "compare") {
+        if (mode === COMPARE_MODE) {
             await Promise.all([
                 runAsk("rag", question, resultsEl, "RAG"),
                 runAsk("crag", question, resultsEl, "CRAG"),
@@ -342,8 +405,7 @@ askBtn.addEventListener("click", async () => {
         }
     } finally {
         stopLivePoll();
-        askBtn.disabled = false;
-        askBtn.textContent = "Ask";
+        setRequestInFlight(false);
         loadTraces();
     }
 });
@@ -434,5 +496,6 @@ resetTracesBtn?.addEventListener("click", async () => {
     loadTraces();
 });
 
+renderScenarioChips();
 checkHealth();
 loadTraces();

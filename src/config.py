@@ -11,6 +11,14 @@ load_dotenv()
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
 
+_TRUTHY_VALUES = frozenset({"1", "true", "yes", "on"})
+
+# The offline evaluation harness (evaluate.py) judges answers with its own
+# model, never CHAT_MODEL: a generator grading its own output inflates every
+# score. gpt-oss-20b is slower than the demo model but is a genuinely separate
+# judge and needs no thinking-disabled flag.
+DEFAULT_EVAL_MODEL = "openai/gpt-oss-20b"
+
 
 @dataclass(frozen=True)
 class Settings:
@@ -29,6 +37,13 @@ class Settings:
     chunk_size: int
     chunk_overlap: int
     topic_score_threshold: float
+    embedding_dimension: int
+    llm_timeout_seconds: float
+    llm_max_retries: int
+    chat_model_fallback: str | None
+    model_thinking_enabled: bool
+    warmup_on_startup: bool
+    eval_model: str
 
 
 def _require(name: str, hint: str) -> str:
@@ -38,6 +53,14 @@ def _require(name: str, hint: str) -> str:
             f"Missing required environment variable {name}. {hint}"
         )
     return value
+
+
+def _env_flag(name: str, default: bool) -> bool:
+    """Parse a boolean env var; unset or blank falls back to ``default``."""
+    raw = (os.getenv(name) or "").strip().strip('"').lower()
+    if not raw:
+        return default
+    return raw in _TRUTHY_VALUES
 
 
 def get_settings() -> Settings:
@@ -63,4 +86,11 @@ def get_settings() -> Settings:
         chunk_size=int(os.getenv("CHUNK_SIZE", "1000")),
         chunk_overlap=int(os.getenv("CHUNK_OVERLAP", "150")),
         topic_score_threshold=float(os.getenv("TOPIC_SCORE_THRESHOLD", "0.20")),
+        embedding_dimension=int(os.getenv("EMBEDDING_DIMENSION", "1024")),
+        llm_timeout_seconds=float(os.getenv("LLM_TIMEOUT_SECONDS", "60")),
+        llm_max_retries=int(os.getenv("LLM_MAX_RETRIES", "2")),
+        chat_model_fallback=(os.getenv("CHAT_MODEL_FALLBACK") or "").strip().strip('"') or None,
+        model_thinking_enabled=_env_flag("MODEL_THINKING_ENABLED", default=False),
+        warmup_on_startup=_env_flag("WARMUP_ON_STARTUP", default=True),
+        eval_model=os.getenv("EVAL_MODEL", DEFAULT_EVAL_MODEL).strip().strip('"'),
     )

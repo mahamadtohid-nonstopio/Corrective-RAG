@@ -16,3 +16,6 @@ ragenv/
 ragenvironment/
 .claude/
 
+
+# Generated evaluation runs (evaluate.py) — the golden set is tracked, results are not
+eval/results-*.json
