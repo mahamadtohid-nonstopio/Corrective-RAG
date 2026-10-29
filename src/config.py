@@ -15,9 +15,10 @@ _TRUTHY_VALUES = frozenset({"1", "true", "yes", "on"})
 
 # The offline evaluation harness (evaluate.py) judges answers with its own
 # model, never CHAT_MODEL: a generator grading its own output inflates every
-# score. gpt-oss-20b is slower than the demo model but is a genuinely separate
-# judge and needs no thinking-disabled flag.
-DEFAULT_EVAL_MODEL = "openai/gpt-oss-20b"
+# score. nemotron-3.5-super-vl-120b is a separate, 4x larger model than the
+# demo generator and the only free-endpoint judge that scored every RAGAS call
+# without timeouts or rate limits (gpt-oss-20b hangs, minimax-m3.1-flash 429s).
+DEFAULT_EVAL_MODEL = "nvidia/nemotron-3.5-super-vl-120b-a12b"
 
 
 @dataclass(frozen=True)
@@ -44,6 +45,8 @@ class Settings:
     model_thinking_enabled: bool
     warmup_on_startup: bool
     eval_model: str
+    live_evaluation_enabled: bool
+    ca_bundle: str | None
 
 
 def _require(name: str, hint: str) -> str:
@@ -53,6 +56,26 @@ def _require(name: str, hint: str) -> str:
             f"Missing required environment variable {name}. {hint}"
         )
     return value
+
+
+def _ca_bundle_path() -> str | None:
+    """Custom CA bundle, when one is configured and actually on disk.
+
+    Behind TLS-inspecting corporate proxies the served certificate is re-signed
+    by a private root that ``certifi`` does not carry, so every outbound call
+    fails with CERTIFICATE_VERIFY_FAILED. ``requests`` and ``ssl`` pick the
+    bundle up from the environment on their own, but the Pinecone SDK passes
+    its own ``ssl_ca_cert`` to urllib3 and ignores the environment — it has to
+    be handed the path explicitly (see :mod:`src.vector_store`).
+
+    A path that does not exist is ignored rather than fatal: the standard
+    bundle still works on any network that isn't intercepting traffic.
+    """
+    for name in ("SSL_CERT_FILE", "REQUESTS_CA_BUNDLE"):
+        raw = (os.getenv(name) or "").strip().strip('"')
+        if raw and Path(raw).is_file():
+            return raw
+    return None
 
 
 def _env_flag(name: str, default: bool) -> bool:
@@ -93,4 +116,6 @@ def get_settings() -> Settings:
         model_thinking_enabled=_env_flag("MODEL_THINKING_ENABLED", default=False),
         warmup_on_startup=_env_flag("WARMUP_ON_STARTUP", default=True),
         eval_model=os.getenv("EVAL_MODEL", DEFAULT_EVAL_MODEL).strip().strip('"'),
+        live_evaluation_enabled=_env_flag("LIVE_EVALUATION", default=True),
+        ca_bundle=_ca_bundle_path(),
     )

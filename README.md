@@ -8,13 +8,140 @@ pipelines side-by-side so you can watch them disagree:
 2. **CRAG (Corrective RAG)** — retrieve → grade each passage → optionally
    rewrite the query and pull the web via Tavily → generate → confidence-score.
 
-Backend: **FastAPI + Uvicorn**, streaming NDJSON.
-Frontend: plain **HTML / CSS / JavaScript** (no build step).
-LLM + embeddings: **NVIDIA endpoints** via the OpenAI-compatible API.
-Retrieval: **Pinecone** (serverless). Tracing: **LangSmith** (optional).
+| Layer | Technology |
+|---|---|
+| Backend | **FastAPI + Uvicorn**, streaming NDJSON |
+| Frontend | plain **HTML / CSS / JavaScript** (no build step) |
+| LLM + embeddings | **NVIDIA endpoints** via the OpenAI-compatible API (`nemotron-3.5-lightning-30b-a3b` chat, `nemotron-3.5-embed-1b` embeddings) |
+| Vector DB | **Pinecone** (serverless, AWS `us-east-1`, cosine, **2048 dimensions**) |
+| Web search | **Tavily** — CRAG's corrective fallback when the corpus can't answer |
+| Tracing | **LangSmith** (optional) |
+| Evaluation | **RAGAS** (offline harness + optional live scoring) |
 
 > Educational reference only. Not a substitute for professional clinical
 > judgement. Verify against primary sources before making patient-care decisions.
+
+---
+
+## What is RAG?
+
+**Retrieval-Augmented Generation** grounds an LLM's answer in your own documents
+instead of its training data:
+
+1. **Ingest** — documents are split into chunks, each chunk is turned into a
+   vector (embedding) and stored in a vector database (Pinecone here).
+2. **Retrieve** — the user's question is embedded the same way and the `TOP_K`
+   most similar chunks are pulled back.
+3. **Generate** — those chunks are pasted into the prompt as context and the
+   LLM writes an answer that cites them (`[1]`, `[2]`, …).
+
+This gives answers that are current, auditable and specific to your corpus,
+without retraining the model.
+
+### The problem with plain RAG
+
+RAG **trusts retrieval blindly**. The vector store always returns the `TOP_K`
+nearest chunks — even when none of them is actually relevant. The LLM then
+either:
+
+- answers from irrelevant context (confidently wrong, with citations that look
+  real), or
+- falls back on its own memory and hallucinates.
+
+There is no step that asks *"is what I retrieved actually good enough to
+answer this?"* In a clinical setting that is the dangerous failure: a question
+the corpus doesn't cover still gets a fluent, cited answer.
+
+## What is CRAG?
+
+**Corrective RAG** ([Yan et al., 2024](https://arxiv.org/abs/2401.15884)) adds a
+self-check between retrieval and generation:
+
+1. **Retrieve** from the vector store, exactly like RAG.
+2. **Grade** each retrieved passage with an LLM: *is this relevant to the
+   question?*
+3. **Decide** based on how much survived grading:
+   - mostly relevant → answer from the local documents;
+   - partly relevant → **supplement** local documents with web results;
+   - nothing relevant → **rewrite** the query for search and answer from the web.
+4. **Web search** via **Tavily** when correction is needed.
+5. **Generate** from the corrected context only.
+
+### Why CRAG is needed
+
+| Situation | RAG | CRAG |
+|---|---|---|
+| Question fully covered by the corpus | ✅ good answer | ✅ same answer (+1 grading call) |
+| Corpus covers it partially | ⚠️ answers from half the evidence | ✅ fills gaps from the web |
+| Medical, but not in the corpus | ❌ answers from irrelevant chunks | ✅ rewrites + web-corrects |
+| Not medical at all | refuses | refuses |
+
+CRAG pays for this with **one to two extra LLM calls and a web round-trip** per
+query. That trade is worth it wherever a wrong-but-confident answer costs more
+than a slower one. This app runs both side by side (**Compare** mode) so you can
+watch exactly where they diverge.
+
+---
+
+## Screenshots
+
+### 1. Pinecone (Vector DB)
+
+Index `lightning-talk-v2` on AWS `us-east-1`, namespace `healthcare-nav`. The
+index uses **2048 dimensions** with **cosine** similarity, which matches the
+output width of `nvidia/nemotron-3.5-embed-1b`. Each record stores the chunk
+text plus `source`, `source_name` and `chunk_id` metadata for citations.
+
+![Pinecone index lightning-talk-v2 with records from the clinical corpus](docs/screenshots/01-pinecone-index.png)
+
+### 2. Pipeline response — RAG vs CRAG
+
+The same question ("How is Lynch syndrome diagnosed…") sent to both pipelines in
+**Compare** mode. Lynch syndrome is **not** in the starter corpus. RAG answers
+from weak local context (confidence **VERY LOW 0.14**). CRAG grades those
+passages as irrelevant, rewrites the query, pulls evidence from the web via
+**Tavily**, and answers with citations (**MODERATE 0.60**, the cap for web-only
+answers).
+
+![RAG and CRAG answers side by side in Compare mode](docs/screenshots/02-pipeline-response.png)
+
+### 3. LLM call log
+
+The telemetry log at the bottom of the page counts the LLM calls behind each
+request. RAG made **2** calls (classify + generate). CRAG made **3** (classify +
+rewrite + generate) and spent extra time on the Tavily round-trip.
+
+![Call log showing 2 RAG and 3 CRAG LLM calls](docs/screenshots/03-llm-call-log.png)
+
+### 4. LangSmith traces
+
+With `LANGSMITH_TRACING=true`, every step is traced to the `healthcare-nav`
+project. Below is CRAG's `crag.rewrite_query` step turning the user's question
+into a search-optimised query, which is then sent to **Tavily** for web search.
+
+![LangSmith trace of the crag.rewrite_query step](docs/screenshots/04-langsmith-trace.png)
+
+### 5. RAGAS evaluation — side-by-side scores
+
+With `LIVE_EVALUATION=true`, the same Lynch syndrome question was scored in the
+background with RAGAS (judge: `EVAL_MODEL`). The full report is in
+[`RAG-Evaluation/evaluations/`](RAG-Evaluation/evaluations/).
+
+| Metric | RAG | CRAG | Better | What it measures |
+|---|---:|---:|---|---|
+| **Overall RAGAS score** | **0.122** (poor) | **0.858** (excellent) | **CRAG** | Mean of the metrics below |
+| `context_relevance` | 0.000 | 1.000 | **CRAG** | Retrieved passages bear on the question |
+| `faithfulness` | 0.000 | 0.926 | **CRAG** | Share of answer claims supported by the retrieved passages |
+| `response_groundedness` | 0.000 | 1.000 | **CRAG** | Answer is anchored in the retrieved passages |
+| `answer_relevancy` | 0.487 | 0.507 | **CRAG** | Answer addresses the question that was asked |
+| Route taken | weak-local | web_only | | Pipeline branch |
+| Pipeline confidence | 0.14 (VERY LOW) | 0.60 (MODERATE) | | Pipeline's own heuristic |
+| Latency | 17.8 s | 23.8 s | | |
+
+RAG's grounding scores are zero because the corpus has nothing on Lynch
+syndrome, so its answer isn't supported by anything it retrieved. CRAG swaps the
+irrelevant chunks for Tavily web results and its answer is fully grounded in
+them, at the cost of ~6 s of extra latency.
 
 ---
 
@@ -22,8 +149,10 @@ Retrieval: **Pinecone** (serverless). Tracing: **LangSmith** (optional).
 
 ```powershell
 # 1. Create + activate a Python 3.10+ venv
-python -m venv .venv
-.\.venv\Scripts\activate
+python -m venv ragenvironment
+.\ragenvironment\Scripts\Activate.ps1
+# If PowerShell says "running scripts is disabled", run once:
+#   Set-ExecutionPolicy -Scope CurrentUser RemoteSigned
 
 # 2. Install dependencies
 pip install -r requirements.txt
@@ -35,8 +164,10 @@ copy .env.example .env
 Then fill in `.env`. The required keys are `NVIDIA_API_KEY`
 (<https://build.nvidia.com/>) and `PINECONE_API_KEY`
 (<https://app.pinecone.io/>); the app refuses to start without them.
-`TAVILY_API_KEY` is optional but **CRAG cannot correct anything without it** —
-without Tavily the corrective path has nowhere to go and simply refuses.
+`TAVILY_API_KEY` (<https://tavily.com>, free tier available) is optional but
+**CRAG cannot correct anything without it**. Tavily is the web search CRAG
+falls back to, so without it the corrective path has nowhere to go and simply
+refuses.
 
 ### Choosing models
 
@@ -68,7 +199,10 @@ embedding model are meaningless to another.
 | `CHAT_MODEL` | — | Primary chat model. |
 | `CHAT_MODEL_FALLBACK` | _(blank)_ | Tried only when the primary **errors or times out**. |
 | `EMBEDDING_MODEL` | — | Must match `EMBEDDING_DIMENSION`. |
-| `EMBEDDING_DIMENSION` | `1024` | Vector width of the embedding model. |
+| `EMBEDDING_DIMENSION` | `2048` | Vector width of the embedding model (`nemotron-3.5-embed-1b` → 2048). |
+| `PINECONE_INDEX` | `lightning-talk-v2` | Index name; created by `ingest.py` if missing. |
+| `PINECONE_NAMESPACE` | `healthcare-nav` | Namespace the chunks are written to. |
+| `LIVE_EVALUATION` | `true` | Score every UI question with RAGAS in the background (needs `requirements-eval.txt`). |
 | `MODEL_THINKING_ENABLED` | `false` | Leave off unless a model needs reasoning. |
 | `EVAL_MODEL` | `openai/gpt-oss-20b` | Judge model for `evaluate.py` only (see Evaluation). |
 | `LLM_TIMEOUT_SECONDS` | `60` | Per-request timeout. |
@@ -94,6 +228,7 @@ This creates the Pinecone index if it doesn't exist and upserts the chunks.
 ## 3. Run the web app
 
 ```powershell
+.\ragenvironment\Scripts\Activate.ps1     # if not already active
 uvicorn server:app --reload
 ```
 
@@ -192,6 +327,11 @@ discarding evidence on an infrastructure failure.
 | CRAG, correction path | 3 (grade/classify + rewrite + generate) |
 | Refused as off-topic | 1 (classify) |
 
+Passage grading is a single batched call over all `TOP_K` passages, not one per
+passage, and grading never runs on the same query as domain classification —
+the gate picks one branch or the other. **[CRAG-FLOW.md](CRAG-FLOW.md)** has the
+full step-by-step diagram and the per-path call accounting.
+
 ### API
 
 | Method | Path | Description |
@@ -240,6 +380,8 @@ Swagger docs at `/docs`.
 | `src/telemetry.py` | In-process LLM-call counter behind `/api/traces` |
 | `static/` | Single-page UI + telemetry dashboard |
 | `data/` | Source documents (starter corpus included) |
+| `RAG-Evaluation/` | Live RAGAS scoring of UI questions; reports in `evaluations/` |
+| `docs/screenshots/` | Images used in this README |
 
 ## Evaluation
 

@@ -11,6 +11,8 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import sys
+import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Callable, Literal
@@ -32,13 +34,14 @@ logger = logging.getLogger("hkn.server")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 # Make sure the pipeline loggers propagate to the root handler (uvicorn --reload
 # sometimes overrides root config; force propagation here).
-for name in ("hkn.rag", "hkn.crag", "hkn.gate", "hkn.server"):
+for name in ("hkn.rag", "hkn.crag", "hkn.gate", "hkn.server", "hkn.live_eval"):
     _lg = logging.getLogger(name)
     _lg.setLevel(logging.INFO)
     _lg.propagate = True
 
 BASE_DIR = Path(__file__).resolve().parent
 STATIC_DIR = BASE_DIR / "static"
+EVALUATION_DIR = BASE_DIR / "RAG-Evaluation"
 
 # Lazily-populated pipeline singletons.
 _state: dict[str, object] = {}
@@ -60,6 +63,49 @@ def _load_pipelines() -> None:
     logger.info("Loading CRAG pipeline …")
     _state["crag"] = CRAGPipeline(settings)
     logger.info("Pipelines ready.")
+
+
+def _load_live_evaluator(settings: Settings) -> None:
+    """Enable per-question RAGAS scoring of frontend answers when possible.
+
+    ragas lives in requirements-eval.txt, not the runtime image, so a missing
+    install (or a judge that cannot be built) disables the feature with a
+    warning instead of failing startup.
+    """
+    if not settings.live_evaluation_enabled:
+        logger.info("Live evaluation disabled (LIVE_EVALUATION=false).")
+        return
+    sys.path.insert(0, str(EVALUATION_DIR))
+    try:
+        from live_evaluation import LiveEvaluator
+
+        _state["live_evaluator"] = LiveEvaluator(
+            settings, {"rag": _state["rag"], "crag": _state["crag"]}
+        )
+    except ImportError:
+        logger.warning(
+            "Live evaluation unavailable: install requirements-eval.txt to enable it.",
+            exc_info=True,
+        )
+        return
+    except Exception:  # noqa: BLE001 — optional feature, startup must not fail
+        logger.warning("Live evaluation could not be initialised.", exc_info=True)
+        return
+    logger.info("Live evaluation enabled (judge: %s).", settings.eval_model)
+
+
+def _live_answer_started(mode: str, question: str) -> None:
+    evaluator = _state.get("live_evaluator")
+    if evaluator is not None:
+        evaluator.answer_started(mode, question)
+
+
+def _live_answer_finished(
+    mode: str, question: str, events: list[dict] | None, duration_seconds: float
+) -> None:
+    evaluator = _state.get("live_evaluator")
+    if evaluator is not None:
+        evaluator.answer_finished(mode, question, events, duration_seconds)
 
 
 def _warm_up_embeddings(rag: RAGPipeline) -> None:
@@ -121,6 +167,7 @@ async def lifespan(app: FastAPI):
         logger.exception("Failed to initialise pipelines: %s", exc)
         _state["startup_error"] = str(exc)
     else:
+        _load_live_evaluator(_state["settings"])  # type: ignore[arg-type]
         await _warm_up_best_effort()
     yield
 
@@ -244,17 +291,30 @@ async def ask_stream(payload: AskRequest):
 
     async def emit():
         errored = False
+        answered = False
+        events: list[dict] = []
+        started = time.perf_counter()
+        _live_answer_started(payload.mode, payload.question)
         try:
             async for event in pipeline.stream(payload.question):
+                events.append(event)
                 yield json.dumps(event) + "\n"
                 if event.get("type") == "error":
                     errored = True
+                elif event.get("type") == "meta":
+                    answered = True
         except Exception as exc:  # noqa: BLE001
             errored = True
             logger.exception("Streaming pipeline error")
             yield json.dumps({"type": "error", "message": str(exc)}) + "\n"
         finally:
             TELEMETRY.end_request(ok=not errored)
+            _live_answer_finished(
+                payload.mode,
+                payload.question,
+                events if answered and not errored else None,
+                time.perf_counter() - started,
+            )
             yield json.dumps({"type": "done"}) + "\n"
 
     return StreamingResponse(

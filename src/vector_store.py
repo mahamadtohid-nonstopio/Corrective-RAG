@@ -39,6 +39,15 @@ def build_embeddings(settings: Settings) -> NVIDIAEmbeddings:
 
 
 def _get_pinecone(settings: Settings) -> Pinecone:
+    """Pinecone client, pointed at a custom CA bundle when one is configured.
+
+    The SDK hands its own ``ssl_ca_cert`` to urllib3 and never consults
+    ``SSL_CERT_FILE``/``REQUESTS_CA_BUNDLE``, so behind a TLS-inspecting proxy
+    it keeps failing on the default certifi bundle even once the rest of the
+    stack is happy. Passing the path explicitly is what makes it agree.
+    """
+    if settings.ca_bundle:
+        return Pinecone(api_key=settings.pinecone_api_key, ssl_ca_certs=settings.ca_bundle)
     return Pinecone(api_key=settings.pinecone_api_key)
 
 
@@ -65,21 +74,29 @@ def _ensure_index(settings: Settings) -> None:
     )
 
 
-def build_vector_store(chunks: list[Document], settings: Settings) -> PineconeVectorStore:
-    """Upsert ``chunks`` into Pinecone under the configured namespace.
+def _build_store(settings: Settings, pc: Pinecone) -> PineconeVectorStore:
+    """Wrap an index handle taken from ``pc`` in a LangChain vector store.
 
-    ``langchain-pinecone`` reads ``PINECONE_API_KEY`` from the process
-    environment (already populated by ``load_dotenv()`` in :mod:`config`).
+    The store is constructed around an existing index handle rather than via
+    ``from_documents``/``from_existing_index``, because those build a Pinecone
+    client of their own from the environment — which drops the custom CA
+    bundle :func:`_get_pinecone` applies and fails behind a TLS-inspecting
+    proxy. Reusing the handle keeps one client, and one TLS configuration.
     """
-    _ensure_index(settings)
     os.environ["PINECONE_API_KEY"] = settings.pinecone_api_key
-    embeddings = build_embeddings(settings)
-    return PineconeVectorStore.from_documents(
-        documents=chunks,
-        embedding=embeddings,
-        index_name=settings.pinecone_index,
+    return PineconeVectorStore(
+        index=pc.Index(settings.pinecone_index),
+        embedding=build_embeddings(settings),
         namespace=settings.pinecone_namespace,
     )
+
+
+def build_vector_store(chunks: list[Document], settings: Settings) -> PineconeVectorStore:
+    """Upsert ``chunks`` into Pinecone under the configured namespace."""
+    _ensure_index(settings)
+    store = _build_store(settings, _get_pinecone(settings))
+    store.add_documents(chunks)
+    return store
 
 
 def load_vector_store(settings: Settings) -> PineconeVectorStore:
@@ -91,10 +108,4 @@ def load_vector_store(settings: Settings) -> PineconeVectorStore:
             f"Pinecone index {settings.pinecone_index!r} does not exist. "
             "Run `python ingest.py` first (it will create the index and upsert data)."
         )
-    os.environ["PINECONE_API_KEY"] = settings.pinecone_api_key
-    embeddings = build_embeddings(settings)
-    return PineconeVectorStore.from_existing_index(
-        index_name=settings.pinecone_index,
-        embedding=embeddings,
-        namespace=settings.pinecone_namespace,
-    )
+    return _build_store(settings, pc)

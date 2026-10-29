@@ -64,6 +64,11 @@ _HYBRID_REASONING_MODEL_MARKERS = ("nemotron-3.5",)
 
 _OPENAI_PROVIDER = "openai"
 
+# RAGAS defaults to 1024, which a reasoning judge can exhaust on a long
+# clinical answer before it finishes the structured verdict
+# (IncompleteOutputException on statement-decomposing metrics).
+EVALUATOR_MAX_TOKENS = 4096
+
 
 def _needs_thinking_disabled(model: str) -> bool:
     return any(marker in model for marker in _HYBRID_REASONING_MODEL_MARKERS)
@@ -92,5 +97,6 @@ def build_evaluator_llm(settings: Settings) -> InstructorBaseRagasLLM:
         settings.eval_model,
         provider=_OPENAI_PROVIDER,
         client=client,
+        max_tokens=EVALUATOR_MAX_TOKENS,
         **_evaluator_model_options(settings.eval_model),
     )

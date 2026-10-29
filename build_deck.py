@@ -215,10 +215,12 @@ def slide_problem(prs, total):
     add_example_card(
         slide, Inches(5.1), Inches(2.05), Inches(4.4), Inches(2.7),
         title="Real example — this build",
-        question="Who is the captain of the Indian cricket team?",
-        retrieved="asthma guidelines · anticoagulation · sepsis protocols",
-        answer="Shubman Gill is the current Test/ODI captain ... [2] [4]",
-        verdict="MODERATE  · 0.60",
+        question="How is Lynch syndrome diagnosed, and what surveillance is recommended?",
+        retrieved="sepsis protocol · hypertension JNC8 · AF anticoagulation · asthma GINA",
+        answer="“The Amsterdam II criteria and Bethesda guidelines screen "
+               "candidates for genetic testing [1][2]” — where [1] is the "
+               "sepsis protocol and [2] is JNC8.",
+        verdict="RAGAS groundedness  · 0.00",
         verdict_color=ORANGE,
     )
 
@@ -313,7 +315,7 @@ def slide_rag_arch(prs, total):
                   size=13, bullet=True, color=INK)
     add_paragraph(notes, "No fallback — corpus miss = LLM invents or refuses awkwardly.",
                   size=13, bullet=True, color=INK)
-    add_paragraph(notes, "No topic gate — cricket, coffee, C++ all get \"answered.\"",
+    add_paragraph(notes, "No topic gate — in-scope and never-indexed questions look identical.",
                   size=13, bullet=True, color=INK)
 
     add_slide_number_footer(slide, 3, total, tag="RAG Architecture")
@@ -335,9 +337,9 @@ def slide_where_rag_breaks(prs, total):
         ("Confident hallucination",
          "Retrieval hits low-relevance chunks; the LLM stitches them together anyway.",
          "The confidence chip says HIGH. The answer is fabricated."),
-        ("Silent off-topic drift",
-         "Questions outside the corpus scope get answered from partial matches.",
-         "Cricket + a medical corpus = a fluent cricket answer."),
+        ("Silent out-of-corpus drift",
+         "A medical question the corpus never covers is answered from partial matches.",
+         "Lynch syndrome surveillance, cited to the sepsis protocol."),
         ("Underused corpus",
          "Weak queries retrieve weak context; strong reformulations never happen.",
          "\"Metformin?\" retrieves less than \"first-line for T2DM with CKD stage 3.\""),

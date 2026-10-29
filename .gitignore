@@ -19,3 +19,7 @@ ragenvironment/
 
 # Generated evaluation runs (evaluate.py) — the golden set is tracked, results are not
 eval/results-*.json
+
+# Generated RAGAS scorecards (RAG-Evaluation/evaluation.py)
+RAG-Evaluation/results/
+RAG-Evaluation/evaluations/
